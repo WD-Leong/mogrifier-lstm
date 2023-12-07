@@ -1,4 +1,3 @@
-
 import time
 import numpy as np
 import pandas as pd
@@ -104,9 +103,8 @@ while True:
             i_encode, dtype=np.int32)
         tmp_test_in = tmp_test_in.reshape((1, -1))
 
-        gen_ids = tf_lstm.infer(
-            lstm_model, tmp_test_in, 
-            gen_len=seq_length, sample=False)
+        gen_ids = lstm_model.infer(
+            tmp_test_in, gen_len=seq_length, sample=False)
         gen_phrase = bpe.bp_decode(
             gen_ids.numpy()[0], idx_2_subword)
         
