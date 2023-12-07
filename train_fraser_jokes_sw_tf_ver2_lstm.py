@@ -1,4 +1,3 @@
-
 import time
 import numpy as np
 import pandas as pd
@@ -40,8 +39,7 @@ def sub_batch_train_step(
         tmp_output = x_output[id_st:id_en, :]
         
         with tf.GradientTape() as grad_tape:
-            output_logits = tf_lstm.decode(
-                model, tmp_encode, training=True)
+            output_logits = model.decode(tmp_encode, training=True)
             
             tmp_losses = tf.reduce_sum(tf.reduce_sum(
                 tf.nn.sparse_softmax_cross_entropy_with_logits(
@@ -71,24 +69,24 @@ prob_keep  = 0.9
 batch_size = 128
 sub_batch  = 128
 num_layers = 3
-num_rounds = 5
+num_rounds = 3
 seq_length = 51
 
 gradient_clip = 1.00
-maximum_iter  = 2000
-restore_flag  = True
-save_step     = 250
+maximum_iter  = 3000
+restore_flag  = False
+save_step     = 100
 warmup_steps  = 50000
-display_step  = 50
+display_step  = 100
 anneal_step   = 2500
 anneal_rate   = 0.75
 
 hidden_size = 256
 warmup_flag = True
-cooling_step = 250
+cooling_step = 500
 
-model_ckpt_dir  = "../TF_Models/keras_lstm_sw_fraser_jokes"
-train_loss_file = "train_loss_keras_lstm_sw_fraser_jokes.csv"
+model_ckpt_dir  = "../TF_Models/keras_lstm_sw_fraser_jokes_v2"
+train_loss_file = "train_loss_keras_lstm_sw_fraser_jokes_v2.csv"
 
 # Load the data. #
 tmp_pkl_file = "../Data/jokes/short_jokes.pkl"
@@ -123,14 +121,14 @@ UNK_token = subword_2_idx["<UNK>"]
 print("Building the LSTM Keras Model.")
 start_time = time.time()
 
-lstm_model = tf_lstm.MogrifierLSTM(
+lstm_model = tf_lstm.LSTM(
     num_layers, hidden_size, vocab_size, 
     seq_length, n_rounds=num_rounds, rate=1.0-prob_keep)
 lstm_optim = tfa.optimizers.AdamW(weight_decay=1.0e-4)
 
 # Initialize the model. #
 init_zeros_in = tf.zeros(
-    [batch_size], dtype=tf.int32)
+    [batch_size], dtype=tf.float32)
 init_c_states = tf.zeros([
     num_layers, batch_size, hidden_size], dtype=tf.float32)
 init_h_states = tf.zeros([
@@ -252,9 +250,8 @@ while n_iter < maximum_iter:
         tmp_test_in = np.array(tmp_p_index[:n_sample])
         tmp_test_in = np.expand_dims(tmp_test_in, axis=0)
         
-        gen_tokens = tf_lstm.infer(
-            lstm_model, tmp_test_in, 
-            gen_len=seq_length, sample=False)
+        gen_tokens = lstm_model.infer(
+            tmp_test_in, gen_len=seq_length, sample=False)
         gen_phrase = bpe.bp_decode(
             gen_tokens[0].numpy(), idx_2_subword)
         gen_phrase = " ".join(gen_phrase).replace(
