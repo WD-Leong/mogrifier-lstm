@@ -55,4 +55,6 @@ SOS to the hotel . to register . EOS
 
 ## Additional Note
 
-The original Mogrifier LSTM was modified to include elements of the PaLM architecture. A feed-forward layer is added in parallel to the layer-normalized inputs and a residual connection adding the Mogrifier LSTM output, the feed-forward output and the un-normalized input is included as the final output at each layer.
+The original Mogrifier LSTM was modified to include elements of the PaLM architecture. A feed-forward layer is added in parallel to the layer-normalized inputs and a residual connection adding the Mogrifier LSTM output, the feed-forward output and the un-normalized input is included as the final output at each layer. 
+
+The modification of the Mogrifier LSTM was also applied to the RNN to try to improve the vanilla RNN performance. Memory footprint is improved by using tf.scan and run-time is improved by using tf.function from the `tf_ver2_mog_rnn_scan.py` and `tf_ver2_mog_lstm.py` files. Import the libraries accordingly to use them.
