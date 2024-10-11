@@ -1,6 +1,42 @@
 
 import tensorflow as tf
 
+# Layer Normalization. #
+class LayerNorm(tf.keras.layers.Layer):
+    def __init__(self, d_model, epsilon=1.0e-3, center=True):
+        # center = True will return Layer Normalization, # 
+        # center = False will return RMS Normalization.  #
+        super(LayerNorm, self).__init__()
+        self.center  = center
+        self.epsilon = epsilon
+
+        if center:
+            self.beta = self.add_weight(
+                name="beta", shape=d_model, 
+                initializer="zeros", trainable=True)
+        else:
+            self.beta = 0.0
+        
+        self.gamma = self.add_weight(
+            name="gamma", shape=d_model, 
+            initializer="ones", trainable=True)
+    
+    def call(self, x):
+        if self.center:
+            x_mean  = tf.reduce_mean(x, axis=-1, keepdims=True)
+            x_sigma = tf.math.sqrt(tf.reduce_mean(
+                tf.square(x - x_mean), axis=-1, keepdims=True))
+            
+            x_scale = tf.divide(
+                x - x_mean, x_sigma + self.epsilon)
+        else:
+            x_sigma = tf.math.sqrt(tf.reduce_mean(
+                tf.square(x), axis=-1, keepdims=True))
+            x_scale = tf.divide(x, x_sigma + self.epsilon)
+        
+        x_output = self.gamma * x_scale + self.beta
+        return x_output
+
 # LSTM Layer. #
 class MogrifierLSTMLayer(tf.keras.layers.Layer):
     def __init__(self, hidden_units, n_rounds=5, rate=0.1):
@@ -15,18 +51,30 @@ class MogrifierLSTMLayer(tf.keras.layers.Layer):
         
         # LSTM bias. #
         self.b = self.add_weight(
-            name="lstm_bias", shape=(4*hidden_units), 
+            name="bias", shape=(4*hidden_units), 
             initializer="zeros", trainable=True)
         
         # Mogrifier weights. #
         self.W_mog = [tf.keras.layers.Dense(
             hidden_units) for _ in range(n_rounds)]
         self.dropout = tf.keras.layers.Dropout(rate)
+
+        # Layer Normalization. #
+        self.lnorm = LayerNorm(hidden_units, epsilon=1.0e-6)
+
+        # Feed forward Layers. #
+        self.ffw1 = tf.keras.layers.Dense(4*hidden_units)
+        self.ffw2 = tf.keras.layers.Dense(hidden_units)
+
+        # Output Projection. #
+        self.o_proj = tf.keras.layers.Dense(hidden_units)
     
     @tf.function
     def call(
         self, x_curr, c_prev, h_prev, training=True):
-        x_mog_prev = x_curr
+        x_norm = self.lnorm(x_curr)
+
+        x_mog_prev = x_norm
         h_mog_prev = h_prev
 
         # Mogrifier Layer before LSTM Layer. #
@@ -57,7 +105,11 @@ class MogrifierLSTMLayer(tf.keras.layers.Layer):
                 lin_proj[:, (3*self.hidden_units):])))
         h_next = tf.multiply(gate_out[2], tf.nn.tanh(c_next))
         h_next = self.dropout(h_next, training=training)
-        return (c_next, h_next)
+
+        # Feed forward layer. #
+        y_ffwd = self.ffw2(tf.nn.relu(self.ffw1(x_norm)))
+        y_next = x_curr + y_ffwd + self.o_proj(h_next)
+        return (c_next, h_next, y_next)
 
 class MogrifierLSTMNetwork(tf.keras.layers.Layer):
     def __init__(
@@ -70,11 +122,6 @@ class MogrifierLSTMNetwork(tf.keras.layers.Layer):
         self.res_conn = res_conn
         self.n_rounds = n_rounds
         self.hidden_units = hidden_units
-        
-        # Layer Normalization. #
-        self.norm_layers = [
-            tf.keras.layers.LayerNormalization(
-                epsilon=1.0e-6) for _ in range(n_layers)]
         
         # Decoder Layers. #
         self.dec_layers = [
@@ -89,11 +136,9 @@ class MogrifierLSTMNetwork(tf.keras.layers.Layer):
         prev_input  = x_input
         layer_input = x_input
         for m in range(self.n_layers):
-            x_norm = self.norm_layers[m](layer_input)
-
             # Mogrifier LSTM Layer. #
             output_tuple = self.dec_layers[m](
-                x_norm, c_prev[m], h_prev[m], training=training)
+                layer_input, c_prev[m], h_prev[m], training=training)
             
             c_next.append(
                 tf.expand_dims(output_tuple[0], axis=0))
@@ -101,11 +146,11 @@ class MogrifierLSTMNetwork(tf.keras.layers.Layer):
                 tf.expand_dims(output_tuple[1], axis=0))
 
             # Residual Connection. #
-            res_output = tf.add(
-                layer_input, output_tuple[1])
+            res_output = output_tuple[2]
             if self.res_conn:
                 res_output += prev_input
             
+            # Assign the inputs of the next layer. #
             prev_input  = layer_input
             layer_input = res_output
         
@@ -128,6 +173,9 @@ class LSTM(tf.keras.Model):
         self.vocab_size = vocab_size
         self.max_seq_len = max_seq_length
         self.hidden_units = hidden_units
+
+        # Dropout layer. #
+        self.dropout = tf.keras.layers.Dropout(rate=rate)
 
         # Vocabulary Embedding. #
         self.dec_embed = tf.keras.layers.Embedding(
@@ -155,33 +203,47 @@ class LSTM(tf.keras.Model):
             output_tuple[2], w_embed, transpose_b=True)
         return c_next, h_next, dec_logit
     
+    # For the prefix sum. #
+    def forward(self, s_prev, x):
+        c_prev = s_prev[0]
+        h_prev = s_prev[1]
+
+        x_tok_embed  = self.dec_embed(x)
+        x_tok_embed = self.dropout(
+            x_tok_embed, training=True)
+        
+        lstm_tuple = self.lstm_model(
+            x_tok_embed, c_prev, h_prev, training=True)
+        return (lstm_tuple[0], lstm_tuple[1], lstm_tuple[2])
+    
+    # Use the prefix sum to compute during training. #
     def decode(self, x, training=True):
         input_shape = x.shape
         batch_size  = input_shape[0]
-        dec_length  = input_shape[1]
         zero_shape  = [
             self.n_layers, batch_size, self.hidden_units]
         
         # Initialise the states. #
-        c_prev = tf.zeros(zero_shape, dtype=tf.float32)
-        h_prev = tf.zeros(zero_shape, dtype=tf.float32)
+        c_init = tf.zeros(zero_shape, dtype=tf.float32)
+        h_init = tf.zeros(zero_shape, dtype=tf.float32)
+        o_init = tf.zeros(zero_shape[1:], dtype=tf.float32)
 
-        dec_logits = []
-        for t_index in range(dec_length):
-            next_tuple = self.call(
-                x[:, t_index], c_prev, 
-                h_prev, training=training)
-            
-            # Update the states. #
-            c_prev = next_tuple[0]
-            h_prev = next_tuple[1]
-            
-            # Append the output logits. #
-            dec_logits.append(
-                tf.expand_dims(next_tuple[2], axis=1))
+        # Reshape the input to seq_len by batch. #
+        x_input = tf.transpose(x, [1, 0])
+
+        # Extract the embedding matrix. #
+        x_vocab_idx = tf.range(self.vocab_size)
+        W_embedding = self.dec_embed(x_vocab_idx)
+
+        # Run the prefix sum algorithm. #
+        init_states = (c_init, h_init, o_init)
+        lstm_states = tf.scan(
+            self.forward, x_input, 
+            init_states, parallel_iterations=1)
         
-        # Concatenate the output logits. #
-        dec_logits = tf.concat(dec_logits, axis=1)
+        dec_states = tf.transpose(lstm_states[2], [1, 0, 2])
+        dec_logits = tf.matmul(
+            dec_states, W_embedding, transpose_b=True)
         return dec_logits
     
     def infer(self, x, gen_len=None, sample=False):
