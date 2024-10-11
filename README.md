@@ -52,3 +52,7 @@ Generated Response:
 SOS to the hotel . to register . EOS
 --------------------------------------------------
 ```
+
+## Additional Note
+
+The original Mogrifier LSTM was modified to include elements of the PaLM architecture. A feed-forward layer is added in parallel to the layer-normalized inputs and a residual connection adding the Mogrifier LSTM output, the feed-forward output and the un-normalized input is included as the final output at each layer.
