@@ -23,6 +23,7 @@ class MogrifierLSTMLayer(tf.keras.layers.Layer):
             hidden_units) for _ in range(n_rounds)]
         self.dropout = tf.keras.layers.Dropout(rate)
     
+    @tf.function
     def call(
         self, x_curr, c_prev, h_prev, training=True):
         x_mog_prev = x_curr
@@ -75,12 +76,6 @@ class MogrifierLSTMNetwork(tf.keras.layers.Layer):
             tf.keras.layers.LayerNormalization(
                 epsilon=1.0e-6) for _ in range(n_layers)]
         
-        # FFN Layers. #
-        self.ffn1_layers = [tf.keras.layers.Dense(
-            4*hidden_units) for _ in range(n_layers)]
-        self.ffn2_layers = [tf.keras.layers.Dense(
-            hidden_units) for _ in range(n_layers)]
-        
         # Decoder Layers. #
         self.dec_layers = [
             MogrifierLSTMLayer(
@@ -104,14 +99,10 @@ class MogrifierLSTMNetwork(tf.keras.layers.Layer):
                 tf.expand_dims(output_tuple[0], axis=0))
             h_next.append(
                 tf.expand_dims(output_tuple[1], axis=0))
-            
-            # FFN Layer. #
-            lstm_ffn1 = self.ffn1_layers[m](x_norm)
-            lstm_ffn2 = self.ffn2_layers[m](tf.nn.relu(lstm_ffn1))
 
             # Residual Connection. #
             res_output = tf.add(
-                layer_input, output_tuple[1] + lstm_ffn2)
+                layer_input, output_tuple[1])
             if self.res_conn:
                 res_output += prev_input
             
@@ -141,10 +132,6 @@ class LSTM(tf.keras.Model):
         # Vocabulary Embedding. #
         self.dec_embed = tf.keras.layers.Embedding(
             vocab_size, hidden_units, name="vocab_embedding")
-        
-        # Output projection. #
-        self.out_proj = tf.keras.layers.Dense(
-            vocab_size, name="output_projection_layer")
 
         # Mogrifier LSTM Network. #
         self.lstm_model = MogrifierLSTMNetwork(
@@ -158,10 +145,16 @@ class LSTM(tf.keras.Model):
         
         c_next = output_tuple[0]
         h_next = output_tuple[1]
-        dec_logit = self.out_proj(output_tuple[2])
+
+        # Get the embedding matrix. #
+        x_vocab = tf.range(self.vocab_size)
+        w_embed = self.dec_embed(x_vocab)
+
+        # Return the vocab logits. #
+        dec_logit = tf.matmul(
+            output_tuple[2], w_embed, transpose_b=True)
         return c_next, h_next, dec_logit
     
-    @tf.function
     def decode(self, x, training=True):
         input_shape = x.shape
         batch_size  = input_shape[0]
