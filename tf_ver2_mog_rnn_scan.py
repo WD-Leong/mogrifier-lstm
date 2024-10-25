@@ -168,6 +168,9 @@ class RNN(tf.keras.Model):
         self.dec_embed = tf.keras.layers.Embedding(
             vocab_size, hidden_units, name="vocab_embedding")
 
+        # Vocabulary Projection. #
+        self.v_proj = tf.keras.layers.Dense(vocab_size)
+
         # RNN Network. #
         self.rnn_model = RNNNetwork(
             n_layers, hidden_units, rate=rate, 
@@ -181,12 +184,13 @@ class RNN(tf.keras.Model):
             x_tok_embed, h_prev, training=training)
         
         # Extract the embedding matrix. #
-        x_vocab_idx = tf.range(self.vocab_size)
-        W_embedding = self.dec_embed(x_vocab_idx)
+        #x_vocab_idx = tf.range(self.vocab_size)
+        #W_embedding = self.dec_embed(x_vocab_idx)
 
         h_current = output_tuple[0]
-        dec_logit = tf.matmul(
-            output_tuple[1], W_embedding, transpose_b=True)
+        dec_logit = self.v_proj(output_tuple[1])
+        #dec_logit = tf.matmul(
+        #    output_tuple[1], W_embedding, transpose_b=True)
         return (h_current, dec_logit)
 
     # For the prefix sum. #
@@ -216,8 +220,8 @@ class RNN(tf.keras.Model):
         x_input = tf.transpose(x, [1, 0])
 
         # Extract the embedding matrix. #
-        x_vocab_idx = tf.range(self.vocab_size)
-        W_embedding = self.dec_embed(x_vocab_idx)
+        #x_vocab_idx = tf.range(self.vocab_size)
+        #W_embedding = self.dec_embed(x_vocab_idx)
         
         # Run the prefix sum algorithm. #
         init_state = (h_init, o_init)
@@ -225,8 +229,9 @@ class RNN(tf.keras.Model):
             self.forward, x_input, 
             init_state, parallel_iterations=1)
         dec_states = tf.transpose(rnn_states[1], [1, 0, 2])
-        dec_logits = tf.matmul(
-            dec_states, W_embedding, transpose_b=True)
+        dec_logits = self.v_proj(dec_states)
+        #dec_logits = tf.matmul(
+        #    dec_states, W_embedding, transpose_b=True)
         return dec_logits
     
     def infer(self, x, gen_len=None, sample=False):
